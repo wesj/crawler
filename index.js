@@ -6,11 +6,13 @@ var urls = require("sdk/url");
 var URL = urls.URL;
 var { setTimeout, clearTimeout } = require("sdk/timers");
 
-function List(data) {
-	data = data || { indices: null, data: null, pendingVlaues: null };
-	this.indices = data.indices || [];
-	this.data = data.data || {}
-	this.pendingValues = data.pendingValues || {};
+var writeCount = 2;
+
+function List(name) {
+	this.name = name;
+	this.data = readJSON(name + "Data.json") || { indices: null, data: null, pendingVlaues: null };
+	this.indices = readJSON(name + "Indices.json") || [];
+	this.pendingValues = readJSON(name + "Pending.json") || {};
 
 	if (this.pendingCount() == 0) {
 		this.addPending("http://www.google.com");
@@ -22,10 +24,12 @@ function List(data) {
 }
 
 List.prototype = {
+	name: "",
 	indexOf: function(key) {
 		var index = this.indices.indexOf(key);
 		if (index == -1) {
 			this.indices.push(key);
+			this.addPending(key);
 			return this.indices.length - 1;
 		}
 		return index;
@@ -48,13 +52,50 @@ List.prototype = {
 		// console.log("Add", key, value);
 		var index = this.indexOf(key);
 		value._index_ = index;
-		this.data[key] = value;
+		this.data[index] = value;
 		this._count++;
+
+		if (this._count % writeCount == 0) {
+			this.write();
+		}
+
 		return index;
 	},
-	addLinkFrom: function(from, to) {
-		addUnique(pages.value(to).linkedBy, from);
+
+	write: function() {
+		//console.log("Write", this.name);
+		writeSites(this.name + "Data.json", this.data);
+		writeSites(this.name + "Indices.json", this.indices);
+		writeSites(this.name + "Pending.json", this.pendingValues);
 	},
+
+	addLinkFrom: function(from, to) {
+		var toVal = pages.value(to);
+		var fromVal = pages.value(from);
+		// console.log("Add link", to, ":", toVal, from, ":", fromVal);
+		if (toVal) {
+			var fromHost = fromVal.host.substring(fromVal.host.indexOf(".")+1);
+			var toHost = toVal.host.substring(toVal.host.indexOf(".")+1);
+			if (fromHost === toHost) addUnique(toVal.internalLinks, from);
+			else addUnique(toVal.externalLinks, from);
+		} else {
+			toVal = pages.index(to);
+			if (toVal) {
+				var u = URL(toVal);
+				if (!u.host) {
+					console.log("No host for", u);
+					return;
+				}
+				var key = u.host.substring(u.host.indexOf(".")+1);
+				if (!this.pendingValues[key]) this.pendingValues[key] = {};
+				if (!this.pendingValues[key][to]) this.pendingValues[key][to] = [];
+				if (from) addUnique(this.pendingValues[key][to], from);
+			} else {
+				console.log("No to for", to);
+			}
+		}
+	},
+
 	pendingCount: function() {
 		var keys = Object.keys(this.pendingValues);
 		var count = 0;
@@ -63,15 +104,16 @@ List.prototype = {
 		}, this)
 		return count;
 	},
+
 	addPending: function(link, from) {
-		var i = this.indexOf(link);
-		var u = URL(link);
-		if (!u.host) {
-			console.log("No host for", link);
-			return;
-		}
-		var key = u.host.substring(u.host.indexOf(".")+1);
 		try {
+			var i = this.indexOf(link);
+			var u = URL(link);
+			if (!u.host) {
+				console.log("No host for", link);
+				return;
+			}
+			var key = u.host.substring(u.host.indexOf(".")+1);
 			if (!this.pendingValues[key]) this.pendingValues[key] = {};
 			if (!this.pendingValues[key][i]) this.pendingValues[key][i] = [];
 			if (from) addUnique(this.pendingValues[key][i], this.indexOf(from));
@@ -79,6 +121,7 @@ List.prototype = {
 			console.log("Err adding pending", ex, link);
 		}
 	},
+
 	getRandomPending: function() {
 		var hosts = Object.keys(this.pendingValues); // ["google.com", "yahoo.com"]
 		var hostIndex = Math.floor(Math.random() * hosts.length); // 0
@@ -86,7 +129,6 @@ List.prototype = {
 		var urls = Object.keys(this.pendingValues[hosts[hostIndex]]); // [34, 224]
 		var urlId = urls.pop(); // 224
 		var from = this.pendingValues[hosts[hostIndex]][urlId];
-		// console.log("Random", hosts[hostIndex], urls, urlId, from);
 
 		if (urls.length == 0) {
 			delete this.pendingValues[hosts[hostIndex]];
@@ -98,15 +140,129 @@ List.prototype = {
 	}
 }
 
+var styles = {
+	medias: {},
+	selectors: {},
+	properties:  {},
+	vals: {},
+	count: 0,
+
+	increment: function(info, page, name) {
+		Object.keys(info[name]).forEach(function(val) {
+			if (!this[name][val]) this[name][val] = {};
+			// console.log(this[name][val], name, val);
+			try {
+				increment(this[name][val], page, info[name][val]);
+			} catch(ex) {
+				console.log("Err incrementing", name, val, ex);
+			}
+		}, this);
+	},
+
+	addInfo: function(info, page) {
+		if (info.media) {
+			if (!this.medias[info.media]) { this.medias[info.media] = []; }
+			this.medias[info.media].push(page);
+		}
+
+		info.urls.forEach(function(url) {
+			var index = pages.indexOf(url);
+			console.log("Add style");
+			pages.addLinkFrom(page, index);
+		});
+
+		this.increment(info, page, "selectors");
+		this.increment(info, page, "properties");
+		this.increment(info, page, "vals");
+
+		this.count++;
+		// console.log("Style", this.count);
+		if (this.count > writeCount) {
+			this.write();
+			this.count = 0;
+		}
+	},
+
+	write: function() {
+		writeSites("styles.json", this);
+	}
+}
+
+var dom = {
+	tags: {},
+	attributes:  {},
+	ids: {},
+	classes: {},
+	count: 0,
+
+	increment: function(info, page, name) {
+		Object.keys(info[name]).forEach(function(val) {
+			if (!this[name][val]) this[name][val] = {};
+			try {
+				increment(this[name][val], page, info[name][val]);
+			} catch(ex) {
+				console.log("Err incrementing", name, val, ex);
+			}
+		}, this);
+	},
+
+	addInfo: function(info, page) {
+		this.increment(info, page, "tags");
+		this.increment(info, page, "attributes");
+		this.increment(info, page, "ids");
+		this.increment(info, page, "classes");
+
+		this.count++;
+		// console.log("DOM", this.count);
+		if (this.count > writeCount) {
+			this.write();
+			this.count = 0;
+		}
+	},
+
+	write: function() {
+		writeSites("dom.json", this);
+	}
+}
+
+var scripts = {
+	count: 0,
+	keywords: {},
+
+	addInfo: function(info, page) {
+		Object.keys(info).forEach(function(val) {
+			if (!this.keywords[val]) this.keywords[val] = {};
+			// console.log(this[val], val);
+			try {
+				increment(this.keywords[val], page, info[val]);
+			} catch(ex) {
+				console.log("Err incrementing", val, ex);
+			}
+		}, this);
+
+		this.count++;
+		// console.log("Scripts", this.count);
+		if (this.count > writeCount) {
+			this.write();
+			this.count = 0;
+		}
+	},
+
+	write: function() {
+		writeSites("scripts.json", this.keywords);
+	},
+
+}
+
 function addPage(page, from) {
 	if (pages[page.url]) {
 		return;
 	}
 
+	var index = undefined;
 	try {
 		var u = URL(page.url);
-		// console.log("Add", page);
-		return pages.add(page.url, {
+		index = pages.add(page.url, {
 			scheme: u.scheme,
 			host: u.host,
 			path: u.path,
@@ -114,22 +270,52 @@ function addPage(page, from) {
 			hash: u.hash,
 			search: u.search,
 			mimeType: u.mimeType,
-			links: page.links.map(function(link) { return pages.indexOf(link); }),
-			linkedBy: [from],
+			anchors: page.anchors.map(function(link) { return pages.indexOf(link); }),
+			links: Object.keys(page.links).map(function(link) { return pages.indexOf(page.links[link]); }),
+			scripts: Object.keys(page.scripts).map(function(script) { return pages.indexOf(script); }),
+			style: Object.keys(page.styles).map(function(style) { return pages.indexOf(style); }),
+			externalLinks: [],
+			internalLinks: [],
 			title: page.title,
 			direction: page.dir,
-			docCharset: page.characterSet,
-			metaCharset: page.metaCharset,
-			description: page.description,
-			contentType: page.contentType,
 			images: page.images.map(function(img) { return images.indexOf(img); }),
-			opengraph: page.opengraph,
+			meta: page.meta,
+			dom: page.dom.nodeCount,
 			visitDate: Date.now(),
 		});
+
+		if (from) {
+			from.forEach(function(f) {
+				pages.addLinkFrom(f, index);				
+			})
+		}
+
+		page.anchors.forEach(function(link) { pages.addLinkFrom(index, pages.indexOf(link)); });
+		Object.keys(page.links).forEach(function(link) { pages.addLinkFrom(index, pages.indexOf(page.links[link])); });
+		Object.keys(page.scripts).forEach(function(link) { pages.addLinkFrom(index, pages.indexOf(link)); });
+		Object.keys(page.styles).forEach(function(link) { pages.addLinkFrom(index, pages.indexOf(link)); });
+		page.images.forEach(function(link) { pages.addLinkFrom(index, pages.indexOf(link)); });
+
+		dom.addInfo(page.dom, index);
+		Object.keys(page.styles).map(function(url) {
+			var index = pages.indexOf(url);
+			styles.addInfo(page.styles[url], index);
+		});
+		Object.keys(page.scripts).map(function(url) {
+			var index = pages.indexOf(url);
+			scripts.addInfo(page.scripts[url], index);
+		});
+		words.addWords(page.words, index);
 	} catch(ex) {
-		console.log("Err adding page", ex, ex.filename, ex.lineNumber, page.url);
+		console.error("Err adding page", ex, ex.filename, ex.lineNumber, page.url);
 	}
-	return undefined;
+	return index;
+}
+
+function increment(obj, val, amt) {
+  amt = amt || 1;
+  if (!obj[val]) obj[val] = 0;
+  obj[val] += amt;
 }
 
 function addUnique(array, val) {
@@ -142,7 +328,7 @@ function addUnique(array, val) {
 }
 
 function readJSON(file, d) {
-	let path = "/Users/wesleyjohnston/crawler/" + file;
+	var path = "/Users/wesleyjohnston/crawler/" + file;
 	var p = d;
 	try {
 		var reader = io.open(path, "r");
@@ -163,29 +349,46 @@ function writeSites(filename, data) {
 	let path = "/Users/wesleyjohnston/crawler/" + filename;
 	var writer = io.open(path, "w");
 	if (!writer.closed) {
-		var data = JSON.stringify(data);
-		writer.write(data);
+		var d = JSON.stringify(data);
+		writer.write(d);
 		writer.close();
 	} else {
-		console.log("Can't open file", path);
+		console.log("Can't write file", path, data);
 	}
 }
 
-var pages = new List(readJSON("pageList.json"));
-var images = new List(readJSON("images.json"));
-var w = readJSON("words.json");
+var pages = new List("pages");
+var images = new List("images");
+
 var words = {
-	list: w ? w.list : {},
-	add: function(word, index) {
-		try {
-			if (!word) return;
-			if (!this.list[word]) {
-				this.list[word] = [];
-			}
-			this.list[word].push(index);
-		} catch(ex) {
-			console.log("Error adding word", ex, word, index);
+	count: 0,
+	list: readJSON("words.json") || [],
+	combos: readJSON("combos.json") || {},
+
+	addWords: function(combos, site) {
+		Object.keys(combos).forEach(function(word) {
+			var index = addUnique(this.list, word);
+			if (!this.combos[index]) this.combos[index] = {};
+			if (!this.combos[index][site]) this.combos[index][site] = [];
+
+			var combo = combos[word];
+			Object.keys(combo).forEach(function(word2) {
+				var j = addUnique(this.list, word2);
+				this.combos[index][site].push(j);
+			}, this);
+		}, this);
+
+		this.count++;
+		// console.log("Words", this.count);
+		if (this.count > writeCount) {
+			this.write();
+			this.count = 0;
 		}
+	},
+
+	write: function() {
+		writeSites("words.json", this.list);
+		writeSites("wordCombos.json", this.combos);
 	}
 }
 
@@ -228,51 +431,42 @@ tabs.on('open', function(tab){
 		});
 
 		worker.port.on("html", function(message) {
-			// console.log(message);
 			var index = addPage(message, loaders[tab] ? loaders[tab].from : null);
+			// console.log(index, message);
 
-			if (loaders[tab]) {
-				addRedirect(loaders[tab], pages.indexOf(tab.url));
+			if (loaders[tab] && loaders[tab].url !== message.url) {
+				addRedirect(loaders[tab].url, pages.indexOf(tab.url));
+				loaders[tab] = null;
 			}
 
-			message.words.forEach(function(word) {
-				words.add(word, index);
-			});
-
+			/*
 			var newPageCount = pages.count();
-			// console.log(newPageCount, pageCount);
 			if (newPageCount - pageCount > 10) {
 				writeSites("pageList.json", pages);
 				writeSites("images.json", images);
 				writeSites("words.json", words);
 				pageCount = newPageCount;
 			}
+			*/
 
-			message.links.forEach(function(link) {
-				if (!pages[link]) {
-					pages.addPending(link, tab.url);
-				} else {
-					pages.addLinkFrom(tab.url, link);
-				}
-			});
-
-			// console.log(pending, pages, pageList);
 			loadNext(tab);
 		})
 	});
 
 	tab.on("error", function onError(tab) {
-		console.log("ERR", loaders[tab], pages.pending.length);
 		pages.add(tab.url, {
 			url: tab.url,
 			error: true
 		});
 
-		pages.add(loaders[tab].url, {
+		var index = pages.add(loaders[tab].url, {
 			url: tab.url,
 			error: true,
-			linkedBy: loaders[tab].from
+			internalLinks: [],
+			externalLinks: []
 		});
+		console.log("Add error");
+		pages.addLinkFrom(loaders[tab].from, index);
 
 		loadNext(tab);
 	});
@@ -280,7 +474,7 @@ tabs.on('open', function(tab){
 	loadNext(tab);
 });
 
-[0,0,0,0,0].forEach(function(url) {
+[0].forEach(function(url) {
 	tabs.open({ url: "about:blank" })
 });
 
@@ -291,7 +485,7 @@ function addRedirect(from, to) {
 
 	try {
 		var u = URL(from.url);
-		pages.add(from.url, {
+		var index = pages.add(from.url, {
 			scheme: u.scheme,
 			host: u.host,
 			path: u.path,
@@ -299,10 +493,15 @@ function addRedirect(from, to) {
 			hash: u.hash,
 			search: u.search,
 			mimeType: u.mimeType,
-			linkedBy: from.from,
+			internalLinks: [],
+			externalLinks: [],
 			visitDate: Date.now(),
 			redirectsTo: to,
 		});
+		if (from) {
+			console.log("Add redirect");
+			pages.addLinkFrom(from, index);
+		}
 	} catch(ex) {
 		console.log("Err adding redirect", ex, from, to);
 	}
