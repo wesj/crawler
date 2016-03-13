@@ -53,62 +53,26 @@ li > a > img {
 	<body>
 		<input id="searchBox" type="search" placeholder="Search">
 <script async="async" type="text/javascript">
-//<![CDATA[/*
-function loadJSON(src) {
-	return new Promise(function(resolve, reject) {
-		var request = new XMLHttpRequest();
-		request.onreadystatechange = function() {
-			if (request.readyState === XMLHttpRequest.DONE) {
-				resolve(JSON.parse(request.response));
-			}
-		}
-		request.open('GET', src, true);
-		request.send(null);
-	});
-}
-
 var siteList;
 window.addEventListener("load", function() {
+	console.log("Load");
+	var worker = new Worker("queryWorker.js");
+	worker.onmessage = function(e) {
+		if (e.data.type == "ready") {
+			console.log("ready");
+		} else if (e.data.type == "results") {
+			showresults(e.data.sites);
+		}
+	}
+	worker.postMessage({ type: "start" });
+
 	siteList = document.querySelector("#sites");
-	Promise.all([loadJSON("pageList copy.json"),
-				 loadJSON("words copy.json")]).then(function(res) {
-
-		console.log(res[0].indices.length, "unique urls found");
-		console.log(Object.keys(res[0].data).length, "Urls visited");
-		console.log(Object.keys(res[1].list).sort(function(a, b) {
-			return res[1].list[b].length - res[1].list[a].length;
-			}), "words indexed");
-		var input = document.querySelector("#searchBox");
-		input.addEventListener("input", function() {
-			var words = input.value.split(/\s+/);
-			var results = [];
-			var result = words.forEach(function(word) {
-				var wordresults = res[1].list[word];
-				if (wordresults) {
-					wordresults.forEach(function(res) {
-						if (results.indexOf(res == -1)) {
-							results.push(res);
-						}
-					});
-				}
-
-				results.sort(function(a, b) {
-					if (!a.linkedBy || !b.linkedBy) return 0;
-					return a.linkedBy.length - b.linkedBy.length;
-				});
-				if (results.length > 0) {
-					var sites = results.map(function(result) {
-						var url = res[0].indices[result];
-						return res[0].data[url];
-					});
-
-					showresults(sites);
-				}
-			})
-		})
+	var input = document.querySelector("#searchBox");
+	input.addEventListener("input", function() {
+		var words = input.value.split(/\s+/);
+		worker.postMessage({ type: "query", words: words });
 	});
 });
-
 function showresults(sites) {
 	siteList.innerHTML = "";
 
@@ -127,7 +91,6 @@ function showresults(sites) {
 		siteList.appendChild(li);
 	});
 }
-//]]>
 </script> 
 	<ol id="sites"></ol>
 	</body>
