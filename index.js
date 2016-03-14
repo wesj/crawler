@@ -7,6 +7,8 @@ require("sdk/preferences/service").set("browser.safebrowsing.downloads.enabled",
 var URL = urls.URL;
 var { setTimeout, clearTimeout } = require("sdk/timers");
 
+var basePath = "/Users/wesleyjohnston/crawler/";
+
 var writeCount = 2;
 
 function List(name) {
@@ -331,7 +333,7 @@ function addUnique(array, val) {
 }
 
 function readJSON(file, d) {
-    var path = "/Users/wesleyjohnston/crawler/_" + file;
+    var path = basePath + "_" + file;
     var p = d;
     try {
         var reader = io.open(path, "r");
@@ -371,8 +373,8 @@ function write(p, data) {
 }
 
 function writeSites(filename, data) {
-    let p = "/Users/wesleyjohnston/crawler/_" + filename;
-    let old = "/Users/wesleyjohnston/crawler/old_" + filename;
+    let p = basePath + "_" + filename;
+    let old = basePath + "old_" + filename;
 
     write(old, read(p));
     write(p, JSON.stringify(data));
