@@ -331,7 +331,7 @@ function addUnique(array, val) {
 }
 
 function readJSON(file, d) {
-    var path = "/Users/wesleyjohnston/crawler/" + file;
+    var path = "/Users/wesleyjohnston/crawler/_" + file;
     var p = d;
     try {
         var reader = io.open(path, "r");
@@ -371,8 +371,8 @@ function write(p, data) {
 }
 
 function writeSites(filename, data) {
-    let p = "/Users/wesleyjohnston/crawler/" + filename;
-    let old = "/Users/wesleyjohnston/crawler/old" + filename;
+    let p = "/Users/wesleyjohnston/crawler/_" + filename;
+    let old = "/Users/wesleyjohnston/crawler/old_" + filename;
 
     write(old, read(p));
     write(p, JSON.stringify(data));
@@ -455,7 +455,6 @@ tabs.on('open', function(tab){
         });
 
         worker.port.on("html", function(message) {
-          console.log(message);
           message.forEach(function(msg) {
              var index = addPage(msg, loaders[tab] ? loaders[tab].from : null);
 
